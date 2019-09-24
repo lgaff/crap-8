@@ -143,18 +143,41 @@ logging.debug(f"Screen y resolution {screen_y}px")
 def main(argv):
     global running
     global delay_timer, sound_timer
-    global register_PC
+    global register_PC, register_V, register_I
+    global main_mem
+    global vmem
+
     
     logging.info("Crap8 - The shitty Chip-8 interpreter")
     args = aparser.parse_args(argv)
 
-    initialise()
+    logging.info("Initialising emulator state")
     pygame.init()
     pygame.font.init()
     reg_font = pygame.font.SysFont('Consolas', FONT_RES)
     pygame.display.set_caption("CRAP-8 DISPLAY")
     logging.info(f"Display mode {screen_x} x {screen_y}")
     screen = pygame.display.set_mode([screen_x, screen_y])
+
+    # main_mem is a 4k byte array. Initlaised to zero.
+    
+    main_mem = c_alloc(TOTAL_RAM)
+    logging.debug(f"Main memory {TOTAL_RAM:d} bytes initalised")
+    
+    # vmem is a 2-d array of tuples. The first value is the pixel state
+    # Second value is whether the pixel has changed in this machine cycle
+    # So we can redraw it if necessary
+    vmem = ins_cls() 
+    logging.debug(f"Video memory {VIDEO_X} bytes initialised")
+
+    register_I = 0
+    register_V = c_alloc(16)
+    logging.debug(f"Registers V0:VF, I initialized")
+
+    register_PC = LOAD_POS
+    logging.debug(f"Register PC initialised to 0x{register_PC:04x}")
+    main_mem[FONT_LOAD:FONT_LOAD+len(FONT_MAP)] = FONT_MAP.copy()
+
     logging.info(f"Loading program {argv[0]} at 0x{register_PC:04x}")
 
     with open(args.program, 'rb') as p:
@@ -163,11 +186,12 @@ def main(argv):
         if len(program) > len(main_mem[register_PC:]):
             raise Exception("Program is too large.")
         main_mem[register_PC:register_PC + len(program)] = program
-    
+
+    logging.info("Emulation starting")
+
     running = True
     step = False
     do_cycle = True
-    logging.info("Emulation starting")
     
     while running:
         screen.fill((255,255,255), (reg_xpos, reg_ypos, reg_w, reg_h))    
@@ -184,7 +208,7 @@ def main(argv):
         instruction = main_mem[register_PC] << 8 | main_mem[register_PC+1]
         if do_cycle: ## Decode & Execute
             if instruction == 0x00E0: # CLS - clear the screen
-                ins_cls()
+                vmem = ins_cls()
             elif instruction == 0x00EE: # RET - return from subroutine
                 ins_ret()
             elif instruction >> 12 == 0x1: # 0x1nnn JP nnn - Jump to instruction nnn
@@ -282,22 +306,7 @@ def initialise():
     
     logging.info("Initialise machine state")
 
-    main_mem = c_alloc(TOTAL_RAM)
-    logging.debug(f"Main memory {TOTAL_RAM:d} bytes initalised")
-    # vmem is a 2-d array of tuples. The first value is the pixel state
-    # Second value is whether the pixel has changed in this machine cycle
-    # So we can redraw it if necessary
-    ins_cls() 
-    
-    logging.debug(f"Video memory {VIDEO_X} bytes initialised")
 
-    register_I = 0
-    register_V = c_alloc(16)
-    logging.debug(f"Registers V0:VF, I initialized")
-
-    register_PC = LOAD_POS
-    logging.debug(f"Register PC initialised to 0x{register_PC:04x}")
-    main_mem[FONT_LOAD:FONT_LOAD+len(FONT_MAP)] = FONT_MAP.copy()
 
 def c_alloc(n):
     """Allocate n byte array as memory"""
@@ -387,9 +396,8 @@ def timer_update(timer, ms):
         return 0
 
 def ins_cls():
-    global vmem
     """Handle instruction 0x00e0 CLS - Clear the screen"""
-    vmem = [[(0, True) for x in range(VIDEO_X)] for y in range(VIDEO_Y)]
+    return [[(0, True) for x in range(VIDEO_X)] for y in range(VIDEO_Y)]
 
 def ins_ret():
     global register_PC
@@ -538,6 +546,7 @@ def ins_draw(x, y, n):
     # for collision detection.
     register_V[0xF] = 0
     logging.debug(f"Memory loc {register_I:04x}, {n} bytes:")
+    logging.debug(len(main_mem))
     for cell in range(n):
         logging.debug(f"{main_mem[register_I + cell]:08b} | {main_mem[register_I + cell]:02x}")
     for row in range(n):
