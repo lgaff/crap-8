@@ -143,6 +143,7 @@ logging.debug(f"Screen y resolution {screen_y}px")
 def main(argv):
     global running
     global delay_timer, sound_timer
+    global register_PC
     
     logging.info("Crap8 - The shitty Chip-8 interpreter")
     args = aparser.parse_args(argv)
@@ -177,8 +178,82 @@ def main(argv):
         pygame.display.flip()
         if register_PC in args.breakpoint:
             step = True
-        if do_cycle:
-            cycle()
+        if register_PC < 0 or register_PC >= len(main_mem): 
+            raise Exception("Memory access error")
+        # Fetch
+        instruction = main_mem[register_PC] << 8 | main_mem[register_PC+1]
+        if do_cycle: ## Decode & Execute
+            if instruction == 0x00E0: # CLS - clear the screen
+                ins_cls()
+            elif instruction == 0x00EE: # RET - return from subroutine
+                ins_ret()
+            elif instruction >> 12 == 0x1: # 0x1nnn JP nnn - Jump to instruction nnn
+                nnn = instruction & 0x0FFF
+                ins_jmp(nnn)
+            elif instruction >> 12 == 0x2: # 0x2nnn CALL - Call subroutine at nnn
+                nnn = instruction & 0x0FFF
+                ins_call(nnn)
+            elif instruction >> 12 == 0x3: # 0x3xkk SE Vx, byte - Skip if Vx == kk
+                logging.debug(f"{instruction:04x} {instruction >> 8:04x} {instruction >> 8 & 0x0F:04x}")
+                x = instruction >> 8 & 0x0F
+                kk = instruction & 0x00FF
+                logging.debug(f"{instruction:04x} {x:04x} {kk:04x}")
+                ins_skipim(x, kk)
+            elif instruction >> 12 == 0x4: # 0x4xkk - SNE Vx, kk
+                x = instruction >> 8 & 0x0F
+                kk = instruction & 0x00FF
+                ins_skipim(x, kk, eq=False)
+            elif instruction >> 12 == 0x5:
+                unimplemented(instruction)
+            elif instruction >> 12 == 0x6: # 0x6xnn LD Vx, nn
+                Vx = instruction >> 8 & 0x0F
+                nn = instruction & 0x00FF # Oof!
+                ins_load(Vx, nn)
+            elif instruction >> 12 == 0x7: # 0x7xkk - ADD Vx, kk
+                x = instruction >> 8 & 0x0F
+                kk = instruction & 0x00FF
+                ins_add(x, kk)
+            elif instruction >> 12 == 0x8: # 0x8000 instructions handle ALU ops
+                x = instruction >> 8 & 0x0F
+                y = instruction >> 4 & 0x0F
+                op = instruction & 0x000F # Ooof!
+                ins_alu(x, op, y)
+            elif instruction >> 12 == 0x9: # SNE Vx Vy
+                if instruction & 0x01:
+                    unimplemented(instruction)
+                else:
+                    logging.debug(f"SNE {instruction:04x} x {instruction >> 8 & 0x0F:1x} y {instruction >> 4 & 0x0F:1x}")
+                    x = instruction >> 8 & 0x0F
+                    y = instruction >> 4 & 0x0F
+                    ins_skipreg(x, y, eq=False)
+
+            elif instruction >> 12 == 0xA: # 0xAnnn LD I, nnn
+                nnn = instruction & 0x0FFF
+                ins_loadi(nnn)
+            elif instruction >> 12 == 0xB:
+                unimplemented(instruction)
+            elif instruction >> 12 == 0xC: # 0xCxkk - RND Vx, kk
+                x = instruction >> 8 & 0x0F
+                kk = instruction & 0x00FF
+                ins_rnd(x, kk)
+            elif instruction >> 12 == 0xD: # 0xDxyn DRW Vx, Vy, nn
+                Vx = instruction >> 8 & 0x0F
+                Vy = instruction >> 4 & 0x0F
+                nn = instruction & 0x000F
+                ins_draw(Vx, Vy, nn)
+            elif instruction >> 12 == 0xE: # Key ops
+                x = instruction >> 8 & 0x0F
+                code = instruction & 0x00FF
+                ins_skipkey(x, code)
+            elif instruction >> 12 == 0xF: # Other IO
+                ins_io(instruction)
+            else:
+                logging.error(f"Undefined opcode {instruction:04x} at address {register_PC:04x}")
+                exit()
+
+            # Bounds-check the pc, roll it over if out of bounds
+            
+            register_PC += 2 % 2**16
         if step:
             do_cycle = False
         for event in pygame.event.get():
@@ -299,88 +374,6 @@ def display_regs(screen, font):
     disp = f"PC: 0x{register_PC:04x} I:  0x{register_I:04x} DT: 0x{delay_timer:04x} ST: 0x{sound_timer:04x}"
     ts = font.render(disp, False, (0,0,0))
     screen.blit(ts, (0,(VIDEO_Y * VIDEO_RES) + line_off * 4))
-
-def cycle():
-    """Simulate one machine instruction cycle and update program state"""
-    global main_mem, vmem, register_V, register_PC, register_I, sound_timer, delay_timer
-    global running
-    ## Fetch
-    if register_PC < 0 or register_PC >= len(main_mem):
-        raise Exception("Memory access error")
-    instruction = main_mem[register_PC] << 8 | main_mem[register_PC+1]
-    
-    ## Decode & Execute
-    if instruction == 0x00E0: # CLS - clear the screen
-        ins_cls()
-    elif instruction == 0x00EE: # RET - return from subroutine
-        ins_ret()
-    elif instruction >> 12 == 0x1: # 0x1nnn JP nnn - Jump to instruction nnn
-        nnn = instruction & 0x0FFF
-        ins_jmp(nnn)
-    elif instruction >> 12 == 0x2: # 0x2nnn CALL - Call subroutine at nnn
-        nnn = instruction & 0x0FFF
-        ins_call(nnn)
-    elif instruction >> 12 == 0x3: # 0x3xkk SE Vx, byte - Skip if Vx == kk
-        logging.debug(f"{instruction:04x} {instruction >> 8:04x} {instruction >> 8 & 0x0F:04x}")
-        x = instruction >> 8 & 0x0F
-        kk = instruction & 0x00FF
-        logging.debug(f"{instruction:04x} {x:04x} {kk:04x}")
-        ins_skipim(x, kk)
-    elif instruction >> 12 == 0x4: # 0x4xkk - SNE Vx, kk
-        x = instruction >> 8 & 0x0F
-        kk = instruction & 0x00FF
-        ins_skipim(x, kk, eq=False)
-    elif instruction >> 12 == 0x5:
-        unimplemented(instruction)
-    elif instruction >> 12 == 0x6: # 0x6xnn LD Vx, nn
-        Vx = instruction >> 8 & 0x0F
-        nn = instruction & 0x00FF # Oof!
-        ins_load(Vx, nn)
-    elif instruction >> 12 == 0x7: # 0x7xkk - ADD Vx, kk
-        x = instruction >> 8 & 0x0F
-        kk = instruction & 0x00FF
-        ins_add(x, kk)
-    elif instruction >> 12 == 0x8: # 0x8000 instructions handle ALU ops
-        x = instruction >> 8 & 0x0F
-        y = instruction >> 4 & 0x0F
-        op = instruction & 0x000F # Ooof!
-        ins_alu(x, op, y)
-    elif instruction >> 12 == 0x9: # SNE Vx Vy
-        if instruction & 0x01:
-            unimplemented(instruction)
-        else:
-            logging.debug(f"SNE {instruction:04x} x {instruction >> 8 & 0x0F:1x} y {instruction >> 4 & 0x0F:1x}")
-            x = instruction >> 8 & 0x0F
-            y = instruction >> 4 & 0x0F
-            ins_skipreg(x, y, eq=False)
-
-    elif instruction >> 12 == 0xA: # 0xAnnn LD I, nnn
-        nnn = instruction & 0x0FFF
-        ins_loadi(nnn)
-    elif instruction >> 12 == 0xB:
-        unimplemented(instruction)
-    elif instruction >> 12 == 0xC: # 0xCxkk - RND Vx, kk
-        x = instruction >> 8 & 0x0F
-        kk = instruction & 0x00FF
-        ins_rnd(x, kk)
-    elif instruction >> 12 == 0xD: # 0xDxyn DRW Vx, Vy, nn
-        Vx = instruction >> 8 & 0x0F
-        Vy = instruction >> 4 & 0x0F
-        nn = instruction & 0x000F
-        ins_draw(Vx, Vy, nn)
-    elif instruction >> 12 == 0xE: # Key ops
-        x = instruction >> 8 & 0x0F
-        code = instruction & 0x00FF
-        ins_skipkey(x, code)
-    elif instruction >> 12 == 0xF: # Other IO
-        ins_io(instruction)
-    else:
-        logging.error(f"Undefined opcode {instruction:04x} at address {register_PC:04x}")
-        exit()
-
-    # Bounds-check the pc, roll it over if out of bounds
-    
-    register_PC += 2 % 2**16
 
 def timer_update(timer, ms):
     """Remove ms from timer according to TIMER_HZ
