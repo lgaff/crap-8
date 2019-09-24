@@ -24,6 +24,9 @@ aparser.add_argument('--breakpoint',
     nargs="+",
     default=[],
     type=lambda x: int(x, 0))
+aparser.add_argument('--debug',
+    help="Enable verbose debug logging",
+    action="store_true")
 
 logging.basicConfig(level=logging.INFO, filename="crap8-log.txt")
 
@@ -151,6 +154,9 @@ def main(argv):
     logging.info("Crap8 - The shitty Chip-8 interpreter")
     args = aparser.parse_args(argv)
 
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+    
     logging.info("Initialising emulator state")
     pygame.init()
     pygame.font.init()
