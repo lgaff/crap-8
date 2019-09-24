@@ -8,10 +8,6 @@
 # You should have received a copy of the CC0 legalcode along with this
 # work.  If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
 
-
-import rom
-import instructions
-
 import sys
 import logging
 import pygame
@@ -79,20 +75,20 @@ FONT_MAP = [
 # proceeding 4 keys across each row and all the way down
 
 # +-----+-----+-----+-----+
-# | 1/2 | 2/3 | 3/4 | C/5 |
+# | 1/1 | 2/2 | 3/3 | C/4 |
 # +-----+-----+-----+-----+
-# | 4/W | 5/E | 6/R | D/T |
+# | 4/Q | 5/W | 6/E | D/R |
 # +-----+-----+-----+-----+
-# | 7/S | 8/D | 9/F | E/G |
+# | 7/A | 8/S | 9/D | E/F |
 # +-----+-----+-----+-----+
-# | A/X | 0/C | B/V | F/B |
+# | A/Z | 0/X | B/C | F/V |
 # +-----+-----+-----+-----+
 
 KEY_MAP = [
-    pygame.K_c, pygame.K_2, pygame.K_3, pygame.K_4,
-    pygame.K_w, pygame.K_e, pygame.K_r, pygame.K_s,
-    pygame.K_d, pygame.K_f, pygame.K_x, pygame.K_v,
-    pygame.K_5, pygame.K_t, pygame.K_g, pygame.K_b
+    pygame.K_x, pygame.K_1, pygame.K_2, pygame.K_3,
+    pygame.K_q, pygame.K_w, pygame.K_e, pygame.K_a,
+    pygame.K_s, pygame.K_d, pygame.K_z, pygame.K_c,
+    pygame.K_4, pygame.K_r, pygame.K_f, pygame.K_v
 ]
 
 main_mem = []
@@ -105,8 +101,6 @@ register_SP = 0
 
 sound_timer = 0
 delay_timer = 0
-
-
 
 running = False
 
@@ -124,9 +118,9 @@ logging.debug(f"Video memory display {VIDEO_X} by {VIDEO_Y}, {VIDEO_X*VIDEO_RES}
 # |                             |                    |
 # |                             |                    |
 # +-----------------------------+                    |
+# |       Registers             |                    |
 # |                             |                    |
-# |       It's free real        |                    |
-# |          estate             |                    |
+# |                             |                    |
 # |                             |                    |
 # +-----------------------------+--------------------+
 
@@ -146,13 +140,66 @@ screen_y = (VIDEO_Y * VIDEO_RES) + reg_h
 logging.debug(f"Screen x resolution {screen_x}px")
 logging.debug(f"Screen y resolution {screen_y}px")
 
-# logging.debug(f"{RAM_Y} > {VIDEO_Y}")
-# if RAM_Y < VIDEO_Y:
-#     logging.debug(f"Using video display dimensions to set y")
-#     screen_y = VIDEO_Y * VIDEO_RES
-# else:
-#     logging.debug(f"Using memory display dimensions to set y")
-#     screen_y = RAM_Y * RAM_RES 
+def main(argv):
+    global running
+    global delay_timer, sound_timer
+    
+    logging.info("Crap8 - The shitty Chip-8 interpreter")
+    args = aparser.parse_args(argv)
+
+    initialise()
+    pygame.init()
+    pygame.font.init()
+    reg_font = pygame.font.SysFont('Consolas', FONT_RES)
+    pygame.display.set_caption("CRAP-8 DISPLAY")
+    logging.info(f"Display mode {screen_x} x {screen_y}")
+    screen = pygame.display.set_mode([screen_x, screen_y])
+    logging.info(f"Loading program {argv[0]} at 0x{register_PC:04x}")
+
+    with open(args.program, 'rb') as p:
+        program = bytearray(p.read())
+        logging.info(f"Program length {len(program)} bytes.")
+        if len(program) > len(main_mem[register_PC:]):
+            raise Exception("Program is too large.")
+        main_mem[register_PC:register_PC + len(program)] = program
+    
+    running = True
+    step = False
+    do_cycle = True
+    logging.info("Emulation starting")
+    
+    while running:
+        screen.fill((255,255,255), (reg_xpos, reg_ypos, reg_w, reg_h))    
+        cycle_start = datetime.now()
+        # display_ram(screen)
+        display_video(screen)
+        display_regs(screen, reg_font)
+        pygame.display.flip()
+        if register_PC in args.breakpoint:
+            step = True
+        if do_cycle:
+            cycle()
+        if step:
+            do_cycle = False
+        for event in pygame.event.get():
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running  = False
+                if event.key == pygame.K_SPACE:
+                    do_cycle = True
+                if event.key == pygame.K_p:
+                    do_cycle = True
+                    step = False
+            if event.type == pygame.QUIT:
+                running = False
+        cycle_end = datetime.now()
+        cycle_time = (cycle_end - cycle_start).microseconds
+        delay_timer = int(timer_update(delay_timer, cycle_time))
+        sound_timer = int(timer_update(sound_timer, cycle_time))
+    pygame.display.quit()
+    logging.info("Emulation halted. Press any key to quit.")
+
+
 
 def initialise():
     global register_PC, register_I, register_V
@@ -177,9 +224,6 @@ def initialise():
     logging.debug(f"Register PC initialised to 0x{register_PC:04x}")
     main_mem[FONT_LOAD:FONT_LOAD+len(FONT_MAP)] = FONT_MAP.copy()
 
-
-
-
 def c_alloc(n):
     """Allocate n byte array as memory"""
     return [0 for i in range(n)]
@@ -191,12 +235,6 @@ def bin_print(c):
     elif (c == '\r') or (c == '\t'):
         return ' '
     return chr(c)
-    # if (c < 32):
-    #     return '.'
-    # else:
-    #     return chr(c)
-
-
 
 def dump_ram(map, start=0, count=-1, bytes_per_row=8):
     """pretty-print the contents of memory to stdout"""
@@ -270,8 +308,8 @@ def cycle():
     if register_PC < 0 or register_PC >= len(main_mem):
         raise Exception("Memory access error")
     instruction = main_mem[register_PC] << 8 | main_mem[register_PC+1]
-    #logging.debug(f"PC {register_PC:04x} Fetch {main_mem[register_PC]:02x} {main_mem[register_PC+1]:02x}: {instruction:04x}")
-    ## Decode
+    
+    ## Decode & Execute
     if instruction == 0x00E0: # CLS - clear the screen
         ins_cls()
     elif instruction == 0x00EE: # RET - return from subroutine
@@ -338,19 +376,17 @@ def cycle():
         ins_io(instruction)
     else:
         logging.error(f"Undefined opcode {instruction:04x} at address {register_PC:04x}")
-        input("Press any key to terminate.")
         exit()
-    ## Execute
-
-    ## Update
 
     # Bounds-check the pc, roll it over if out of bounds
     
     register_PC += 2 % 2**16
 
 def timer_update(timer, ms):
-    """Remove ms from timer according to TIMER_HZ"""
-    # logging.debug(f"Cycle {ms}ms, Tick {1000000/TIMER_HZ}ms, {ms/(1000000/TIMER_HZ)} ticks")
+    """Remove ms from timer according to TIMER_HZ
+       Treats timer as a floating point value. Since chip-8 timers are expected to be
+       integers, bear this fact in mind if you need to display it"""
+    
     nt = timer - ms/(1000000 / TIMER_HZ)
     if nt > 0:
         return nt
@@ -374,16 +410,19 @@ def ins_ret():
 
     
 def unimplemented(instruction):
+    """Handle unimplemented instructions. Likely unnecessary in final release"""
     global register_PC, running
     logging.info(f"{register_PC:04x} | OP 0x{instruction:04x} - Unimplemented")
     running = False
 
 def ins_jmp(n):
+    """Handle JP instruction"""
     global register_PC
     logging.info(f"{register_PC:04x} | OP 0x1{n:03x} - JP {n:03x}")
     register_PC = n - 2 # TODO: This is a shitty hack. Fix it.
 
 def ins_call(n):
+    """Handle CALL instruction"""
     global stack
     global register_PC
     global register_SP
@@ -392,6 +431,7 @@ def ins_call(n):
     register_SP += 1
     if register_SP >= len(stack):
         logging.error("Stack overflow")
+        exit()
     else:
         stack[register_SP] = register_PC
         register_PC = n - 2 # TODO: This is a shitty hack. Fix it.
@@ -499,10 +539,6 @@ def ins_draw(x, y, n):
     global register_V
     global vmem
     logging.info(f"{register_PC:04x} | OP 0xD{x:1x}{y:1x}{n:1x} - DRW V{x:1x}, V{y:1x}, {n:1x} ({register_V[x]:02x} {register_V[y]:02x})")
-
-    #logging.debug(f"VIDEO MEMORY PRE")
-    #for row in range(VIDEO_Y):
-    #    logging.debug(f'{row:02d} | {"".join([str(x) for x in vmem[row*VIDEO_X:row*VIDEO_X+VIDEO_X]])}')
     # Draw sprite at location (x, y) into vmem
     # Each byte in memory at [I] represents one line of the sprite.
     # Pixels are binary and the value should be xor'd with the incoming pixel
@@ -538,7 +574,7 @@ def ins_skipkey(x, code):
         if not pygame.key.get_pressed()[KEY_MAP[register_V[x]]]:
             register_PC += 2
     else:
-        logging.error(f"Invalid instruction at {register_PC:04x}: {op:04x}")
+        logging.error(f"Invalid instruction at {register_PC:04x}: {code:04x}")
         running = False
 
 def ins_io(op):
@@ -608,67 +644,7 @@ def ins_io(op):
         
     
 
-def main(argv):
-    global running
-    global delay_timer, sound_timer
-    
-    logging.info("Crap8 - The shitty Chip-8 interpreter")
-    args = aparser.parse_args(argv)
 
-    initialise()
-
-    pygame.init()
-    pygame.font.init()
-    reg_font = pygame.font.SysFont('Consolas', FONT_RES)
-    pygame.display.set_caption("CRAP-8 DISPLAY")
-    logging.info(f"Display mode {screen_x} x {screen_y}")
-    screen = pygame.display.set_mode([screen_x, screen_y])
-
-    logging.info(f"Loading program {argv[0]} at 0x{register_PC:04x}")
-
-    with open(args.program, 'rb') as p:
-        program = bytearray(p.read())
-        logging.info(f"Program length {len(program)} bytes.")
-        if len(program) > len(main_mem[register_PC:]):
-            raise Exception("Program is too large.")
-        main_mem[register_PC:register_PC + len(program)] = program
-    
-
-    running = True
-    step = False
-    do_cycle = True
-    logging.info("Emulation starting")
-    
-    while running:
-        screen.fill((255,255,255), (reg_xpos, reg_ypos, reg_w, reg_h))    
-        cycle_start = datetime.now()
-        # display_ram(screen)
-        display_video(screen)
-        display_regs(screen, reg_font)
-        pygame.display.flip()
-        if register_PC in args.breakpoint:
-            step = True
-        if do_cycle:
-            cycle()
-        if step:
-            do_cycle = False
-        for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_q:
-                    running  = False
-                if event.key == pygame.K_SPACE:
-                    do_cycle = True
-                if event.key == pygame.K_p:
-                    do_cycle = True
-                    step = False
-            if event.type == pygame.QUIT:
-                running = False
-        cycle_end = datetime.now()
-        cycle_time = (cycle_end - cycle_start).microseconds
-        delay_timer = int(timer_update(delay_timer, cycle_time))
-        sound_timer = int(timer_update(sound_timer, cycle_time))
-    pygame.display.quit()
-    logging.info("Emulation halted. Press any key to quit.")
 
 if __name__ == "__main__":
     main(sys.argv[1:])
