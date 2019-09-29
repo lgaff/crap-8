@@ -37,19 +37,23 @@ TIMER_HZ = 60
 TOTAL_RAM = 4096
 LOAD_POS = 0x200
 
-# Graphical layout of video and main memory
+# RAM Display constants
 RAM_X = 32 # bytes to display per row
 RAM_Y = int(TOTAL_RAM/RAM_X) # total rows to display
 RAM_RES = 8
 
+# Chip-8 Video display constants
 VIDEO_X = 64
 VIDEO_Y = 32
 VIDEO_RES = 8 # pygame pixels per chip-8 pixel.
 PIXEL_ON = (255,255,255)
 PIXEL_OFF = (64,64,64)
 
+# Resolution of fonts used for register display
 FONT_RES = 18 # Register fonts, not chip-8 fonts.
 
+
+# Chip-8 ROM Font map
 FONT_LOAD = 0x50
 FONT_MAP = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, # 0
@@ -94,6 +98,7 @@ KEY_MAP = [
     pygame.K_4, pygame.K_r, pygame.K_f, pygame.K_v
 ]
 
+# Machine state variables
 main_mem = []
 vmem = []
 register_I = 0
@@ -132,13 +137,13 @@ logging.debug(f"Video memory display {VIDEO_X} by {VIDEO_Y}, {VIDEO_X*VIDEO_RES}
 # to draw.
 # The width will always factor both dimensions
 logging.debug(f"{VIDEO_X} * {VIDEO_RES} + {RAM_X} * {RAM_RES}")
-reg_xpos = 0
-reg_ypos = (VIDEO_Y * VIDEO_RES)
-reg_w = (VIDEO_X * VIDEO_RES)
-reg_h = (5 * FONT_RES) + 10
+reg_disp_xpos = 0
+reg_disp_ypos = (VIDEO_Y * VIDEO_RES)
+reg_disp_w = (VIDEO_X * VIDEO_RES)
+reg_disp_h = (5 * FONT_RES) + 10
 
 screen_x = (VIDEO_X * VIDEO_RES) #  + (RAM_X * RAM_RES)
-screen_y = (VIDEO_Y * VIDEO_RES) + reg_h
+screen_y = (VIDEO_Y * VIDEO_RES) + reg_disp_h
 
 logging.debug(f"Screen x resolution {screen_x}px")
 logging.debug(f"Screen y resolution {screen_y}px")
@@ -200,7 +205,7 @@ def main(argv):
     do_cycle = True
     
     while running:
-        screen.fill((255,255,255), (reg_xpos, reg_ypos, reg_w, reg_h))    
+        screen.fill((255,255,255), (reg_disp_xpos, reg_disp_ypos, reg_disp_w, reg_disp_h))    
         cycle_start = datetime.now()
         # display_ram(screen)
         display_video(screen)
