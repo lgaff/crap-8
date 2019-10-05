@@ -30,9 +30,11 @@ aparser.add_argument('--debug',
 
 logging.basicConfig(level=logging.INFO, filename="crap8-log.txt")
 
-# Constants
+## CONSTANTS ##
 
+# Clock speeds used by Chip-8
 TIMER_HZ = 60
+CYCLE_HZ = 500
 
 TOTAL_RAM = 4096
 LOAD_POS = 0x200
@@ -45,12 +47,14 @@ RAM_RES = 8
 # Chip-8 Video display constants
 VIDEO_X = 64
 VIDEO_Y = 32
-VIDEO_RES = 8 # pygame pixels per chip-8 pixel.
+VIDEO_RES = 8
+# Pixel colors for display
 PIXEL_ON = (255,255,255)
 PIXEL_OFF = (64,64,64)
 
 # Resolution of fonts used for register display
-FONT_RES = 18 # Register fonts, not chip-8 fonts.
+REG_FONT_RES = 18
+REG_FONT_PAD = 10
 
 
 # Chip-8 ROM Font map
@@ -101,102 +105,96 @@ KEY_MAP = [
 # Machine state variables
 main_mem = []
 vmem = []
-register_I = 0
-register_V = []
-register_PC = 0
+reg_I = 0
+reg_V = []
+reg_PC = 0
 stack = [0,0,0,0,0,0,0,0]
-register_SP = 0
+reg_SP = 0
 
-sound_timer = 0
-delay_timer = 0
+# programmable timers used by Chip-8
+# Both operate at TIMER_HZ hz.
+s_timer = 0
+d_timer = 0
+# Ticks deducted per wall-second from timers
+timer_tps = 1000000 / TIMER_HZ
 
-running = False
 
-logging.debug(f"Main memory display {RAM_X} by {RAM_Y}, {RAM_X*RAM_RES} x {RAM_Y*RAM_RES} pixels")
-logging.debug(f"Video memory display {VIDEO_X} by {VIDEO_Y}, {VIDEO_X*VIDEO_RES} x {VIDEO_Y * VIDEO_RES} pixels")
 
-# Determine the required screen size to accomodate memory display next to screen
-# +-----------------------------+--------------------+
-# |                             |                    |
-# |                             |                    |
-# |                             |                    |
-# |     Screen (64px * 32px)    |  RAM (16 b/row)    |
-# |     px = VIDEO_RES          |                    |
-# |                             |                    |
-# |                             |                    |
-# |                             |                    |
-# +-----------------------------+                    |
-# |       Registers             |                    |
-# |                             |                    |
-# |                             |                    |
-# |                             |                    |
-# +-----------------------------+--------------------+
 
-# If memory display is wider than it is tall
-# The video output will determine the height of the display
-# to draw.
-# The width will always factor both dimensions
-logging.debug(f"{VIDEO_X} * {VIDEO_RES} + {RAM_X} * {RAM_RES}")
-reg_disp_xpos = 0
-reg_disp_ypos = (VIDEO_Y * VIDEO_RES)
-reg_disp_w = (VIDEO_X * VIDEO_RES)
-reg_disp_h = (5 * FONT_RES) + 10
-
-screen_x = (VIDEO_X * VIDEO_RES) #  + (RAM_X * RAM_RES)
-screen_y = (VIDEO_Y * VIDEO_RES) + reg_disp_h
-
-logging.debug(f"Screen x resolution {screen_x}px")
-logging.debug(f"Screen y resolution {screen_y}px")
 
 def main(argv):
     global running
-    global delay_timer, sound_timer
-    global register_PC, register_V, register_I
+    global d_timer, s_timer
+    global reg_PC, reg_V, reg_I
     global main_mem
     global vmem
 
-    
+    running = False
     logging.info("Crap8 - The shitty Chip-8 interpreter")
     args = aparser.parse_args(argv)
 
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    logging.info("Initialising emulator state")
+    logging.info("Initialise display engine")
     pygame.init()
     pygame.font.init()
-    reg_font = pygame.font.SysFont('Consolas', FONT_RES)
+
+    
+    
+
+    # RAM display
+    # TODO: re-enable this.
+    logging.debug(f"Main memory display {RAM_X} by {RAM_Y}, {RAM_X*RAM_RES} x {RAM_Y*RAM_RES} pixels")    
+
+    # Register display
+    reg_font = pygame.font.SysFont('Consolas', REG_FONT_RES)
+    reg_disp_xpos = 0
+    reg_disp_ypos = (VIDEO_Y * VIDEO_RES)
+    reg_disp_w = (VIDEO_X * VIDEO_RES)
+    reg_disp_h = (5 * REG_FONT_RES) + REG_FONT_PAD
+    logging.debug(f"Register display {reg_disp_w} x {reg_disp_h} pixels")
+
+    logging.debug(f"Video memory display {VIDEO_X} by {VIDEO_Y}, {VIDEO_X*VIDEO_RES} x {VIDEO_Y * VIDEO_RES} pixels")
+
+    # Total pygame display size
+    screen_x = (VIDEO_X * VIDEO_RES) #  + (RAM_X * RAM_RES)
+    screen_y = (VIDEO_Y * VIDEO_RES) + reg_disp_h
+    logging.debug(f"Screen x resolution {screen_x}px")
+    logging.debug(f"Screen y resolution {screen_y}px")
+
+    
     pygame.display.set_caption("CRAP-8 DISPLAY")
     logging.info(f"Display mode {screen_x} x {screen_y}")
     screen = pygame.display.set_mode([screen_x, screen_y])
-
-    # main_mem is a 4k byte array. Initlaised to zero.
     
     main_mem = c_alloc(TOTAL_RAM)
+    main_mem[FONT_LOAD:FONT_LOAD+len(FONT_MAP)] = FONT_MAP.copy()
     logging.debug(f"Main memory {TOTAL_RAM:d} bytes initalised")
+    logging.debug(f"Fonts loaded to {FONT_LOAD:04x}")
     
     # vmem is a 2-d array of tuples. The first value is the pixel state
     # Second value is whether the pixel has changed in this machine cycle
     # So we can redraw it if necessary
-    vmem = ins_cls() 
+    vmem = ins_cls()
     logging.debug(f"Video memory {VIDEO_X} bytes initialised")
 
-    register_I = 0
-    register_V = c_alloc(16)
+    reg_I = 0
+    reg_V = c_alloc(16)
     logging.debug(f"Registers V0:VF, I initialized")
 
-    register_PC = LOAD_POS
-    logging.debug(f"Register PC initialised to 0x{register_PC:04x}")
-    main_mem[FONT_LOAD:FONT_LOAD+len(FONT_MAP)] = FONT_MAP.copy()
+    reg_PC = LOAD_POS
+    logging.debug(f"Register PC initialised to 0x{reg_PC:04x}")
 
-    logging.info(f"Loading program {argv[0]} at 0x{register_PC:04x}")
+
+    logging.info(f"Loading program {argv[0]} at 0x{reg_PC:04x}")
 
     with open(args.program, 'rb') as p:
         program = bytearray(p.read())
         logging.info(f"Program length {len(program)} bytes.")
-        if len(program) > len(main_mem[register_PC:]):
+        if len(program) > len(main_mem[reg_PC:]):
             raise Exception("Program is too large.")
-        main_mem[register_PC:register_PC + len(program)] = program
+        main_mem[reg_PC:reg_PC + len(program)] = program
 
     logging.info("Emulation starting")
 
@@ -211,12 +209,12 @@ def main(argv):
         display_video(screen)
         display_regs(screen, reg_font)
         pygame.display.flip()
-        if register_PC in args.breakpoint:
+        if reg_PC in args.breakpoint:
             step = True
-        if register_PC < 0 or register_PC >= len(main_mem): 
+        if reg_PC < 0 or reg_PC >= len(main_mem): 
             raise Exception("Memory access error")
         # Fetch
-        instruction = main_mem[register_PC] << 8 | main_mem[register_PC+1]
+        instruction = main_mem[reg_PC] << 8 | main_mem[reg_PC+1]
         if do_cycle: ## Decode & Execute
             if instruction == 0x00E0: # CLS - clear the screen
                 vmem = ins_cls()
@@ -283,12 +281,12 @@ def main(argv):
             elif instruction >> 12 == 0xF: # Other IO
                 ins_io(instruction)
             else:
-                logging.error(f"Undefined opcode {instruction:04x} at address {register_PC:04x}")
+                logging.error(f"Undefined opcode {instruction:04x} at address {reg_PC:04x}")
                 exit()
 
             # Bounds-check the pc, roll it over if out of bounds
             
-            register_PC += 2 % 2**16
+            reg_PC += 2 % 2**16
         if step:
             do_cycle = False
         for event in pygame.event.get():
@@ -304,20 +302,10 @@ def main(argv):
                 running = False
         cycle_end = datetime.now()
         cycle_time = (cycle_end - cycle_start).microseconds
-        delay_timer = int(timer_update(delay_timer, cycle_time))
-        sound_timer = int(timer_update(sound_timer, cycle_time))
+        d_timer = int(timer_update(d_timer, cycle_time))
+        s_timer = int(timer_update(s_timer, cycle_time))
     pygame.display.quit()
     logging.info("Emulation halted. Press any key to quit.")
-
-
-
-def initialise():
-    global register_PC, register_I, register_V
-    global main_mem, vmem
-    
-    logging.info("Initialise machine state")
-
-
 
 def c_alloc(n):
     """Allocate n byte array as memory"""
@@ -386,12 +374,12 @@ def display_regs(screen, font):
     for x in range(0, 16, 4):
         disp = ""
         for r in range(4):
-            disp += f"V{x+r:1X}: 0x{register_V[x+r]:04x} "
+            disp += f"V{x+r:1X}: 0x{reg_V[x+r]:04x} "
         ts = font.render(disp, False, (0,0,0))
         
         screen.blit(ts, (0, (VIDEO_Y * VIDEO_RES) + line_off * (x / 4)))
 
-    disp = f"PC: 0x{register_PC:04x} I:  0x{register_I:04x} DT: 0x{delay_timer:04x} ST: 0x{sound_timer:04x}"
+    disp = f"PC: 0x{reg_PC:04x} I:  0x{reg_I:04x} DT: 0x{d_timer:04x} ST: 0x{s_timer:04x}"
     ts = font.render(disp, False, (0,0,0))
     screen.blit(ts, (0,(VIDEO_Y * VIDEO_RES) + line_off * 4))
 
@@ -411,200 +399,200 @@ def ins_cls():
     return [[(0, True) for x in range(VIDEO_X)] for y in range(VIDEO_Y)]
 
 def ins_ret():
-    global register_PC
-    global register_SP
-    logging.info(f"{register_PC:04x} | OP 0x00EE - RET")
+    global reg_PC
+    global reg_SP
+    logging.info(f"{reg_PC:04x} | OP 0x00EE - RET")
     logging.info(f"")
-    register_PC = stack[register_SP]
-    register_SP -= 1
-    if register_SP < 0:
+    reg_PC = stack[reg_SP]
+    reg_SP -= 1
+    if reg_SP < 0:
         logging.error("Stack underflow.")
 
     
 def unimplemented(instruction):
     """Handle unimplemented instructions. Likely unnecessary in final release"""
-    global register_PC, running
-    logging.info(f"{register_PC:04x} | OP 0x{instruction:04x} - Unimplemented")
+    global reg_PC, running
+    logging.info(f"{reg_PC:04x} | OP 0x{instruction:04x} - Unimplemented")
     running = False
 
 def ins_jmp(n):
     """Handle JP instruction"""
-    global register_PC
-    logging.info(f"{register_PC:04x} | OP 0x1{n:03x} - JP {n:03x}")
-    register_PC = n - 2 # TODO: This is a shitty hack. Fix it.
+    global reg_PC
+    logging.info(f"{reg_PC:04x} | OP 0x1{n:03x} - JP {n:03x}")
+    reg_PC = n - 2 # TODO: This is a shitty hack. Fix it.
 
 def ins_call(n):
     """Handle CALL instruction"""
     global stack
-    global register_PC
-    global register_SP
-    logging.info(f"{register_PC:04x} | OP 0x2{n:03x} - CALL {n:03x}")
+    global reg_PC
+    global reg_SP
+    logging.info(f"{reg_PC:04x} | OP 0x2{n:03x} - CALL {n:03x}")
     logging.info("")
-    register_SP += 1
-    if register_SP >= len(stack):
+    reg_SP += 1
+    if reg_SP >= len(stack):
         logging.error("Stack overflow")
         exit()
     else:
-        stack[register_SP] = register_PC
-        register_PC = n - 2 # TODO: This is a shitty hack. Fix it.
+        stack[reg_SP] = reg_PC
+        reg_PC = n - 2 # TODO: This is a shitty hack. Fix it.
 
 
 
 def ins_skipim(x, kk, eq=True):
-    global register_PC
+    global reg_PC
     if eq:
-        logging.info(f"{register_PC:04x} | OP 0x3{x:01x}{kk:02x} - SE V{x:1x}, {kk:02x} ({register_V[x]:02x})")
-        if register_V[x] == kk:
-            register_PC += 2
+        logging.info(f"{reg_PC:04x} | OP 0x3{x:01x}{kk:02x} - SE V{x:1x}, {kk:02x} ({reg_V[x]:02x})")
+        if reg_V[x] == kk:
+            reg_PC += 2
     else:
-        logging.info(f"{register_PC:04x} | OP 0x4{x:01x}{kk:02x} - SNE V{x:1x}, {kk:02x} ({register_V[x]:02x})")
-        if register_V[x] != kk:
-            register_PC += 2
+        logging.info(f"{reg_PC:04x} | OP 0x4{x:01x}{kk:02x} - SNE V{x:1x}, {kk:02x} ({reg_V[x]:02x})")
+        if reg_V[x] != kk:
+            reg_PC += 2
 
 def ins_load(reg, n):
-    global register_V
-    logging.info(f"{register_PC:04x} | OP 0x6{reg:1x}{n:02x} - LD V{reg:1x}, {n:02x}")
-    register_V[reg] = n
+    global reg_V
+    logging.info(f"{reg_PC:04x} | OP 0x6{reg:1x}{n:02x} - LD V{reg:1x}, {n:02x}")
+    reg_V[reg] = n
 
 def ins_add(x, kk):
-    logging.info(f"{register_PC:04x} | OP 0x7{x:01x}{kk:02x} - ADD V{x:1x}, {kk:02x} ({register_V[x]} + {kk})")
-    register_V[x] += kk
-    register_V[x] &= 0xFF
+    logging.info(f"{reg_PC:04x} | OP 0x7{x:01x}{kk:02x} - ADD V{x:1x}, {kk:02x} ({reg_V[x]} + {kk})")
+    reg_V[x] += kk
+    reg_V[x] &= 0xFF
 
 def ins_alu(x, op, y):
     global running
-    global register_V
-    register_V[0xF] = 0
+    global reg_V
+    reg_V[0xF] = 0
     if op == 0x0:
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - LD V{x:1x}, V{y:1x} (V{x:1x} <- {register_V[y]:02x})")
-        register_V[x] = register_V[y]
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - LD V{x:1x}, V{y:1x} (V{x:1x} <- {reg_V[y]:02x})")
+        reg_V[x] = reg_V[y]
     elif op == 0x1:
         # OR Vx, Vy
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - OR V{x:1x}, V{y:1x} ({register_V[x]:02x} | {register_V[y]:02x} = {register_V[x] | register_V[y]:04x})")
-        register_V[x] = register_V[x] | register_V[y]
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - OR V{x:1x}, V{y:1x} ({reg_V[x]:02x} | {reg_V[y]:02x} = {reg_V[x] | reg_V[y]:04x})")
+        reg_V[x] = reg_V[x] | reg_V[y]
     elif op == 0x2:
         # AND Vx, Vy
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - AND V{x:1x}, V{y:1x} ({register_V[x]:02x} & {register_V[y]:02x} = {register_V[x] & register_V[y]:04x})")
-        register_V[x] = register_V[x] & register_V[y]
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - AND V{x:1x}, V{y:1x} ({reg_V[x]:02x} & {reg_V[y]:02x} = {reg_V[x] & reg_V[y]:04x})")
+        reg_V[x] = reg_V[x] & reg_V[y]
     elif op == 0x3:
         # XOR Vx, Vy
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - XOR V{x:1x}, V{y:1x} ({register_V[x]:02x} ^ {register_V[y]:02x} = {register_V[x] ^ register_V[y]:04x})")
-        register_V[x] = register_V[x] ^ register_V[y]
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - XOR V{x:1x}, V{y:1x} ({reg_V[x]:02x} ^ {reg_V[y]:02x} = {reg_V[x] ^ reg_V[y]:04x})")
+        reg_V[x] = reg_V[x] ^ reg_V[y]
     elif op == 0x4:
         # ADD Vx, Vy, set carry flag if > 255. Truncate to 8 bits.
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - ADD V{x:1x}, V{y:1x} ({register_V[x]:02x} + {register_V[y]:02x} = {register_V[x] + register_V[y]:04x})")
-        result = register_V[x] + register_V[y]
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - ADD V{x:1x}, V{y:1x} ({reg_V[x]:02x} + {reg_V[y]:02x} = {reg_V[x] + reg_V[y]:04x})")
+        result = reg_V[x] + reg_V[y]
         if result > 0xFF:
-            register_V[0xF] = 1
-        register_V[x] = result & 0xFF
+            reg_V[0xF] = 1
+        reg_V[x] = result & 0xFF
     elif op == 0x5:
         # SUB Vx, Vy. Set the flag if Vx > Vy. Truncate to 8 bits.
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SUB V{x:1x}, V{y:1x} ({register_V[x]:02x} - {register_V[y]:02x} = {register_V[x] - register_V[y]:04x})")
-        if register_V[x] > register_V[y]:
-            register_V[0xF] = 1
-        register_V[x] = (register_V[x] - register_V[y]) & 0xFF
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SUB V{x:1x}, V{y:1x} ({reg_V[x]:02x} - {reg_V[y]:02x} = {reg_V[x] - reg_V[y]:04x})")
+        if reg_V[x] > reg_V[y]:
+            reg_V[0xF] = 1
+        reg_V[x] = (reg_V[x] - reg_V[y]) & 0xFF
     elif op == 0x6:
         # SHR Vx. If lsb of Vx is 1, set VF.
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SHR V{x:1x}, V{y:1x} ({register_V[x]:02x} >> {register_V[y]:02x} = {register_V[x] >> register_V[y]:04x}))")
-        register_V[0xF] = register_V[x] % 2
-        register_V[x] = register_V[x] >> 1 
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SHR V{x:1x}, V{y:1x} ({reg_V[x]:02x} >> {reg_V[y]:02x} = {reg_V[x] >> reg_V[y]:04x}))")
+        reg_V[0xF] = reg_V[x] % 2
+        reg_V[x] = reg_V[x] >> 1 
     elif op == 0x7:
         # SUBN Vx, Vy
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SUBN V{x:1x}, V{y:1x} ({register_V[y]:02x} - {register_V[x]:02x} = {register_V[y] - register_V[x]:04x}))")
-        if register_V[y] > register_V[x]:
-            register_V[0xF] = 1
-        register_V[x] = (register_V[y] - register_V[x]) & 0xFF
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SUBN V{x:1x}, V{y:1x} ({reg_V[y]:02x} - {reg_V[x]:02x} = {reg_V[y] - reg_V[x]:04x}))")
+        if reg_V[y] > reg_V[x]:
+            reg_V[0xF] = 1
+        reg_V[x] = (reg_V[y] - reg_V[x]) & 0xFF
     elif op == 0xE:
         # SHL Vx, Vy
-        logging.info(f"{register_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SHL V{x:1x}, V{y:1x} ({register_V[x]:02x} << {register_V[y]:02x} = {register_V[x] << register_V[y]:04x}))")
-        register_V[0xF] = (register_V[x] >> 8) & 0x1
-        register_V[x] = (register_V[x] << 1) & 0xFF
+        logging.info(f"{reg_PC:04x} | OP 0x8{x:01x}{y:1x}{op:1x} - SHL V{x:1x}, V{y:1x} ({reg_V[x]:02x} << {reg_V[y]:02x} = {reg_V[x] << reg_V[y]:04x}))")
+        reg_V[0xF] = (reg_V[x] >> 8) & 0x1
+        reg_V[x] = (reg_V[x] << 1) & 0xFF
     else:
-        logging.error(f"Invalid instruction at {register_PC:04x}: {op:04x}")
+        logging.error(f"Invalid instruction at {reg_PC:04x}: {op:04x}")
         running = False
     
 
 def ins_skipreg(x, y, eq=True):
-    global register_PC
+    global reg_PC
     if eq:
-        logging.info(f"{register_PC:04x} | OP 0x0{x:01x}{y:1x}0 - SE V{x:1x}, V{y:1x} ({register_V[x]:02x}, {register_V[y]:02x})")
-        if register_V[x] == register_V[y]:
-            register_PC += 2
+        logging.info(f"{reg_PC:04x} | OP 0x0{x:01x}{y:1x}0 - SE V{x:1x}, V{y:1x} ({reg_V[x]:02x}, {reg_V[y]:02x})")
+        if reg_V[x] == reg_V[y]:
+            reg_PC += 2
     else:
-        logging.info(f"{register_PC:04x} | OP 0x9{x:01x}{y:1x}0 - SNE V{x:1x}, V{y:1x} ({register_V[x]:02x}, {register_V[y]:02x})")
-        if register_V[x] != register_V[y]:
-            register_PC += 2    
+        logging.info(f"{reg_PC:04x} | OP 0x9{x:01x}{y:1x}0 - SNE V{x:1x}, V{y:1x} ({reg_V[x]:02x}, {reg_V[y]:02x})")
+        if reg_V[x] != reg_V[y]:
+            reg_PC += 2    
 
 def ins_loadi(n):
-    global register_I
-    logging.info(f"{register_PC:04x} | OP 0xA{n:03x} - LD I, {n:03x}")
-    register_I = n
+    global reg_I
+    logging.info(f"{reg_PC:04x} | OP 0xA{n:03x} - LD I, {n:03x}")
+    reg_I = n
 
 def ins_rnd(x, kk):
-    global register_V
-    logging.info(f"{register_PC:04x} | OP 0xC{x:01x}{kk:02x} - RND V{x:1x}, {kk:02x}")
+    global reg_V
+    logging.info(f"{reg_PC:04x} | OP 0xC{x:01x}{kk:02x} - RND V{x:1x}, {kk:02x}")
     randalthor = random.randint(0, 255) & kk
-    register_V[x] = randalthor
+    reg_V[x] = randalthor
 
 
 def ins_draw(x, y, n):
-    global register_V
+    global reg_V
     global vmem
-    logging.info(f"{register_PC:04x} | OP 0xD{x:1x}{y:1x}{n:1x} - DRW V{x:1x}, V{y:1x}, {n:1x} ({register_V[x]:02x} {register_V[y]:02x})")
+    logging.info(f"{reg_PC:04x} | OP 0xD{x:1x}{y:1x}{n:1x} - DRW V{x:1x}, V{y:1x}, {n:1x} ({reg_V[x]:02x} {reg_V[y]:02x})")
     # Draw sprite at location (x, y) into vmem
     # Each byte in memory at [I] represents one line of the sprite.
     # Pixels are binary and the value should be xor'd with the incoming pixel
     # for collision detection.
-    register_V[0xF] = 0
-    logging.debug(f"Memory loc {register_I:04x}, {n} bytes:")
+    reg_V[0xF] = 0
+    logging.debug(f"Memory loc {reg_I:04x}, {n} bytes:")
     logging.debug(len(main_mem))
     for cell in range(n):
-        logging.debug(f"{main_mem[register_I + cell]:08b} | {main_mem[register_I + cell]:02x}")
+        logging.debug(f"{main_mem[reg_I + cell]:08b} | {main_mem[reg_I + cell]:02x}")
     for row in range(n):
-        ypos = (register_V[y] + row) % VIDEO_Y
+        ypos = (reg_V[y] + row) % VIDEO_Y
         for col in range(8):
-            xpos = (register_V[x] + col) % VIDEO_X
+            xpos = (reg_V[x] + col) % VIDEO_X
 
-            px = main_mem[register_I + row] >> (7 - col) & 0x1
+            px = main_mem[reg_I + row] >> (7 - col) & 0x1
             logging.debug(f"pixel ({xpos}, {ypos}) in {px} out {vmem[ypos][xpos][0]} :: {vmem[ypos][xpos][0] ^ px}")
             if px + vmem[ypos][xpos][0] == 2:
                 logging.debug("set collision")
-                register_V[0xF] = 1
+                reg_V[0xF] = 1
             
             vmem[ypos][xpos] = (vmem[ypos][xpos][0] ^ px, True)
 
 
 def ins_skipkey(x, code):
-    global register_PC
+    global reg_PC
     global running
     if code == 0x9E:
-        logging.info(f"{register_PC:04x} | OP 0xE{x:1x}9E - SKP V{x:1x} ({register_V[x]:02x})")
-        if pygame.key.get_pressed()[KEY_MAP[register_V[x]]]:
-            register_PC += 2
+        logging.info(f"{reg_PC:04x} | OP 0xE{x:1x}9E - SKP V{x:1x} ({reg_V[x]:02x})")
+        if pygame.key.get_pressed()[KEY_MAP[reg_V[x]]]:
+            reg_PC += 2
     elif code == 0xA1:
-        logging.info(f"{register_PC:04x} | OP 0xE{x:1x}A1 - SKNP V{x:1x} ({register_V[x]:02x})")
-        logging.debug(f"Key {KEY_MAP[register_V[x]]}")
-        if not pygame.key.get_pressed()[KEY_MAP[register_V[x]]]:
-            register_PC += 2
+        logging.info(f"{reg_PC:04x} | OP 0xE{x:1x}A1 - SKNP V{x:1x} ({reg_V[x]:02x})")
+        logging.debug(f"Key {KEY_MAP[reg_V[x]]}")
+        if not pygame.key.get_pressed()[KEY_MAP[reg_V[x]]]:
+            reg_PC += 2
     else:
-        logging.error(f"Invalid instruction at {register_PC:04x}: {code:04x}")
+        logging.error(f"Invalid instruction at {reg_PC:04x}: {code:04x}")
         running = False
 
 def ins_io(op):
-    global register_V
-    global register_PC
+    global reg_V
+    global reg_PC
     global running
-    global delay_timer
-    global sound_timer
+    global d_timer
+    global s_timer
     global main_mem
-    global register_I
+    global reg_I
     code = op & 0x00FF
     x = op >> 8 & 0x0F
     if code == 0x07:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, DT")
-        register_V[x] = delay_timer
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, DT")
+        reg_V[x] = d_timer
     elif code == 0x0A:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, K")
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, K")
         # Halt execution and wait for a keypress. Store the key in Vx
         pygame.event.clear()
         while True:
@@ -612,46 +600,46 @@ def ins_io(op):
             logging.debug(f"Event found {event.type}")
             if (event.type == pygame.KEYDOWN) and (event.key in KEY_MAP):
                 logging.debug(f"Store event {event.key} to V{x:1x}")
-                register_V[x] = KEY_MAP.index(event.key)
+                reg_V[x] = KEY_MAP.index(event.key)
                 break
     elif code == 0x15:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD DT, V{x:1x}")
-        delay_timer = register_V[x]
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD DT, V{x:1x}")
+        d_timer = reg_V[x]
     elif code == 0x18:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD ST, V{x:1x}")
-        sound_timer = register_V[x]
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD ST, V{x:1x}")
+        s_timer = reg_V[x]
     elif code == 0x1E:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - ADD I, V{x:1x}")
-        register_I += register_V[x] 
-        register_I &= 0xFFFF
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - ADD I, V{x:1x}")
+        reg_I += reg_V[x] 
+        reg_I &= 0xFFFF
     elif code == 0x29:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD F, V{x:1x}")
-        if register_V[x] < 0 or register_V[x] > len(FONT_MAP):
-            logging.error("Invalid font designator at {register_PC:04x}: {register_V[x]:04x}")
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD F, V{x:1x}")
+        if reg_V[x] < 0 or reg_V[x] > len(FONT_MAP):
+            logging.error("Invalid font designator at {reg_PC:04x}: {reg_V[x]:04x}")
             running = False
         else:
-            register_I = FONT_LOAD + 5 * register_V[x]
+            reg_I = FONT_LOAD + 5 * reg_V[x]
     elif code == 0x33:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD B, V{x:1x}")
-        hundreds = int(register_V[x] / 100)
-        tens = int((register_V[x] - 100 * hundreds) / 10)
-        digits = register_V[x] % 10
-        main_mem[register_I] = hundreds
-        main_mem[register_I+1] = tens
-        main_mem[register_I+2] = digits
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD B, V{x:1x}")
+        hundreds = int(reg_V[x] / 100)
+        tens = int((reg_V[x] - 100 * hundreds) / 10)
+        digits = reg_V[x] % 10
+        main_mem[reg_I] = hundreds
+        main_mem[reg_I+1] = tens
+        main_mem[reg_I+2] = digits
 
     elif code == 0x55:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD [I], V{x:1x}")
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD [I], V{x:1x}")
         for n in range(x):
-            main_mem[register_I+n] = register_V[n]
+            main_mem[reg_I+n] = reg_V[n]
     elif code == 0x65:
-        logging.info(f"{register_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, [I]")
-        logging.debug(f"I: {register_I:04x}")
+        logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, [I]")
+        logging.debug(f"I: {reg_I:04x}")
         for n in range(x+1):
-            logging.debug(f"V{n:1x} -> {main_mem[register_I+n]:02x}")
-            register_V[n] = main_mem[register_I+n]
+            logging.debug(f"V{n:1x} -> {main_mem[reg_I+n]:02x}")
+            reg_V[n] = main_mem[reg_I+n]
     else:
-        logging.error(f"Invalid instruction at {register_PC:04x}: {op:04x}")
+        logging.error(f"Invalid instruction at {reg_PC:04x}: {op:04x}")
         running = False
     
         
