@@ -143,8 +143,8 @@ def main(argv):
 
     # Register display
     reg_font = pygame.font.SysFont('Consolas', REG_FONT_RES)
-    reg_disp_xpos = 0
-    reg_disp_ypos = (VIDEO_Y * VIDEO_RES)
+    reg_disp_x_off = 0
+    reg_disp_y_off = (VIDEO_Y * VIDEO_RES)
     reg_disp_w = (VIDEO_X * VIDEO_RES)
     reg_disp_h = (5 * REG_FONT_RES) + REG_FONT_PAD
     logging.debug(f"Register display {reg_disp_w} x {reg_disp_h} pixels")
@@ -170,7 +170,7 @@ def main(argv):
     # v_mem is a 2-d array of tuples. The first value is the pixel state
     # Second value is whether the pixel has changed in this machine cycle
     # So we can redraw it if necessary
-    v_mem = ins_cls()
+    v_mem = ins_cls(screen)
     logging.debug(f"Video memory {VIDEO_X} bytes initialised")
 
     reg_I = 0
@@ -198,12 +198,12 @@ def main(argv):
     
     # Main Emulation loop start
     while running:
-        screen.fill((255,255,255), (reg_disp_xpos, reg_disp_ypos, reg_disp_w, reg_disp_h))    
+        screen.fill((255,255,255), (reg_disp_x_off, reg_disp_y_off, reg_disp_w, reg_disp_h))    
         cycle_start = datetime.now()
         # display_ram(screen)
-        display_video(screen)
-        display_regs(screen, reg_font)
-        pygame.display.flip()
+        # display_video(screen)
+        # display_regs(screen, reg_font)
+        # pygame.display.flip()
         if reg_PC in args.breakpoint:
             step = True
         if reg_PC < 0 or reg_PC >= len(main_mem): 
@@ -212,7 +212,7 @@ def main(argv):
         instruction = main_mem[reg_PC] << 8 | main_mem[reg_PC+1]
         if do_cycle: ## Decode & Execute
             if instruction == 0x00E0: # CLS - clear the screen
-                v_mem = ins_cls()
+                v_mem = ins_cls(screen)
             elif instruction == 0x00EE: # RET - return from subroutine
                 ins_ret()
             elif instruction >> 12 == 0x1: # 0x1nnn JP nnn - Jump to instruction nnn
@@ -268,7 +268,7 @@ def main(argv):
                 Vx = instruction >> 8 & 0x0F
                 Vy = instruction >> 4 & 0x0F
                 nn = instruction & 0x000F
-                ins_draw(Vx, Vy, nn)
+                ins_draw(screen, Vx, Vy, nn)
             elif instruction >> 12 == 0xE: # Key ops
                 x = instruction >> 8 & 0x0F
                 code = instruction & 0x00FF
@@ -335,20 +335,6 @@ def dump_registers(V, pc, I):
     print ("\n".join([f'{f"V{x}":<3}: {V[x]:02X} {f"V{x+1}":<3}: {V[x+1]:02X}' for x in range(0, 16, 2)]))
     print (f"PC: {pc:02X}")
     print (f"I:  {I:04X}")
-        
-def display_video(screen):
-    global v_mem
-    for y in range (VIDEO_Y):
-        for x in range (VIDEO_X):
-            # logging.debug(f"{x}, {y})")
-            px = v_mem[y][x]
-            if px[1]:
-                if px[0]:
-                    color = PIXEL_ON
-                else:
-                    color = PIXEL_OFF
-                pygame.draw.rect(screen, color, (x*VIDEO_RES,y*VIDEO_RES,VIDEO_RES,VIDEO_RES))
-                v_mem[y][x] = (px[0], False)
 
 def display_ram(screen):
     """Update the ram display with contents of memory"""
@@ -389,8 +375,10 @@ def timer_update(timer, ms):
     else:
         return 0
 
-def ins_cls():
+def ins_cls(screen):
     """Handle instruction 0x00e0 CLS - Clear the screen"""
+    pygame.draw.rect(screen, PIXEL_OFF, (0, 0, VIDEO_X * VIDEO_RES, VIDEO_Y * VIDEO_RES))
+    pygame.display.flip()
     return [[(0, True) for x in range(VIDEO_X)] for y in range(VIDEO_Y)]
 
 def ins_ret():
@@ -530,12 +518,12 @@ def ins_rnd(x, kk):
     reg_V[x] = randalthor
 
 
-def ins_draw(x, y, n):
+def ins_draw(screen, x, y, n):
+    """Draw n-row sprite at location (x, y) into v_mem using reg_I as pointer"""
     global reg_V
     global v_mem
     logging.info(f"{reg_PC:04x} | OP 0xD{x:1x}{y:1x}{n:1x} - DRW V{x:1x}, V{y:1x}, {n:1x} ({reg_V[x]:02x} {reg_V[y]:02x})")
-    # Draw sprite at location (x, y) into v_mem
-    # Each byte in memory at [I] represents one line of the sprite.
+    # Each byte in memory at [I] represents one row of the sprite.
     # Pixels are binary and the value should be xor'd with the incoming pixel
     # for collision detection.
     reg_V[0xF] = 0
@@ -544,18 +532,24 @@ def ins_draw(x, y, n):
     for cell in range(n):
         logging.debug(f"{main_mem[reg_I + cell]:08b} | {main_mem[reg_I + cell]:02x}")
     for row in range(n):
-        ypos = (reg_V[y] + row) % VIDEO_Y
+        y_off = (reg_V[y] + row) % VIDEO_Y
         for col in range(8):
-            xpos = (reg_V[x] + col) % VIDEO_X
-
-            px = main_mem[reg_I + row] >> (7 - col) & 0x1
-            logging.debug(f"pixel ({xpos}, {ypos}) in {px} out {v_mem[ypos][xpos][0]} :: {v_mem[ypos][xpos][0] ^ px}")
-            if px + v_mem[ypos][xpos][0] == 2:
+            x_off = (reg_V[x] + col) % VIDEO_X
+            oldpx = v_mem[y_off][x_off][0]
+            newpx = main_mem[reg_I + row] >> (7 - col) & 0x1
+            logging.debug(f"pixel ({x_off}, {y_off}) in {newpx} out {oldpx} :: {oldpx ^ newpx}")
+            if newpx + v_mem[y_off][x_off][0] == 2:
                 logging.debug("set collision")
                 reg_V[0xF] = 1
             
-            v_mem[ypos][xpos] = (v_mem[ypos][xpos][0] ^ px, True)
+            v_mem[y_off][x_off] = (oldpx ^ newpx, True)
 
+            if v_mem[y_off][x_off][0]:
+                color = PIXEL_ON
+            else:
+                color = PIXEL_OFF
+            pygame.draw.rect(screen, color, (x_off*VIDEO_RES,y_off*VIDEO_RES,VIDEO_RES,VIDEO_RES))
+    pygame.display.flip()
 
 def ins_skipkey(x, code):
     global reg_PC
