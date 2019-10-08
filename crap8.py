@@ -202,7 +202,7 @@ def main(argv):
         cycle_start = datetime.now()
         # display_ram(screen)
         # display_video(screen)
-        # display_regs(screen, reg_font)
+        display_regs(screen, reg_font)
         # pygame.display.flip()
         if reg_PC in args.breakpoint:
             step = True
@@ -514,8 +514,7 @@ def ins_loadi(n):
 def ins_rnd(x, kk):
     global reg_V
     logging.info(f"{reg_PC:04x} | OP 0xC{x:01x}{kk:02x} - RND V{x:1x}, {kk:02x}")
-    randalthor = random.randint(0, 255) & kk
-    reg_V[x] = randalthor
+    reg_V[x] = random.randint(0, 255) & kk
 
 
 def ins_draw(screen, x, y, n):
