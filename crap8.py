@@ -14,6 +14,7 @@ import pygame
 import random
 from datetime import datetime
 import argparse
+import time
 
 aparser = argparse.ArgumentParser(description="The shitty Chip-8 emulator")
 aparser.add_argument('program',
@@ -28,13 +29,23 @@ aparser.add_argument('--debug',
     help="Enable verbose debug logging",
     action="store_true")
 
-logging.basicConfig(level=logging.INFO, filename="crap8-log.txt")
+# This used to log to a file, but I found that updating the
+# video display resulted in an unplayably fast frame rate.
+# I tried inserting a sleep() call, but Python's sleep
+# function is not fine-grained enough to accurately
+# simulate a 500hz clock speed, resulting in a painfully
+# slow frame rate instead.
+# The solution is to implement an IO delay in it's place :)
+logging.basicConfig(level=logging.INFO)
 
 ## CONSTANTS ##
 
 # Clock speeds used by Chip-8
+# NB: These are mostly superfluous now, but I've kept them
+# just in case
 TIMER_HZ = 60
 CYCLE_HZ = 500
+CYCLE_US = 1000000 / CYCLE_HZ
 
 TOTAL_RAM = 4096
 LOAD_POS = 0x200
@@ -55,7 +66,10 @@ PIXEL_OFF = (64,64,64)
 # Resolution of fonts used for register display
 REG_FONT_RES = 18
 REG_FONT_PAD = 10
-
+REG_DISP_X_OFF = 0
+REG_DISP_Y_OFF = (VIDEO_Y * VIDEO_RES)
+REG_DISP_W = (VIDEO_X * VIDEO_RES)
+REG_DISP_H = (5 * REG_FONT_RES) + REG_FONT_PAD
 
 # Chip-8 ROM Font map
 FONT_LOAD = 0x50
@@ -136,24 +150,19 @@ def main(argv):
     pygame.init()
     pygame.font.init()
 
- 
-    # RAM display
-    # TODO: re-enable this.
     logging.debug(f"Main memory display {RAM_X} by {RAM_Y}, {RAM_X*RAM_RES} x {RAM_Y*RAM_RES} pixels")    
 
     # Register display
     reg_font = pygame.font.SysFont('Consolas', REG_FONT_RES)
-    reg_disp_x_off = 0
-    reg_disp_y_off = (VIDEO_Y * VIDEO_RES)
-    reg_disp_w = (VIDEO_X * VIDEO_RES)
-    reg_disp_h = (5 * REG_FONT_RES) + REG_FONT_PAD
-    logging.debug(f"Register display {reg_disp_w} x {reg_disp_h} pixels")
+
+
+    logging.debug(f"Register display {REG_DISP_W} x {REG_DISP_H} pixels")
 
     logging.debug(f"Video memory display {VIDEO_X} by {VIDEO_Y}, {VIDEO_X*VIDEO_RES} x {VIDEO_Y * VIDEO_RES} pixels")
 
     # Total pygame display size
-    screen_x = (VIDEO_X * VIDEO_RES) #  + (RAM_X * RAM_RES)
-    screen_y = (VIDEO_Y * VIDEO_RES) + reg_disp_h
+    screen_x = (VIDEO_X * VIDEO_RES) + (RAM_X * RAM_RES)
+    screen_y = (VIDEO_Y * VIDEO_RES) + REG_DISP_H
     logging.debug(f"Screen x resolution {screen_x}px")
     logging.debug(f"Screen y resolution {screen_y}px")
 
@@ -190,20 +199,19 @@ def main(argv):
             raise Exception("Program is too large.")
         main_mem[reg_PC:reg_PC + len(program)] = program
 
+    
     logging.info("Emulation starting")
 
     running = True
     step = False
     do_cycle = True
-    
+    update_ram(screen, 0, len(main_mem))
     # Main Emulation loop start
     while running:
-        screen.fill((255,255,255), (reg_disp_x_off, reg_disp_y_off, reg_disp_w, reg_disp_h))    
+  
         cycle_start = datetime.now()
-        # display_ram(screen)
-        # display_video(screen)
+        # TODO: This could be optimised to only refresh when a register changes
         display_regs(screen, reg_font)
-        # pygame.display.flip()
         if reg_PC in args.breakpoint:
             step = True
         if reg_PC < 0 or reg_PC >= len(main_mem): 
@@ -274,7 +282,7 @@ def main(argv):
                 code = instruction & 0x00FF
                 ins_skipkey(x, code)
             elif instruction >> 12 == 0xF: # Other IO
-                ins_io(instruction)
+                ins_io(instruction, screen)
             else:
                 logging.error(f"Undefined opcode {instruction:04x} at address {reg_PC:04x}")
                 exit()
@@ -297,6 +305,8 @@ def main(argv):
                 running = False
         cycle_end = datetime.now()
         cycle_time = (cycle_end - cycle_start).microseconds
+
+        # Update timers and sleep for the rest of the cycle
         d_timer = int(timer_update(d_timer, cycle_time))
         s_timer = int(timer_update(s_timer, cycle_time))
     pygame.display.quit()
@@ -306,52 +316,24 @@ def c_alloc(n):
     """Allocate n byte array as memory"""
     return [0 for i in range(n)]
 
-def bin_print(c):
-    """Print a byte's ascii value, or '.' if out of range"""
-    if c < 32:
-        return '.'
-    elif (c == '\r') or (c == '\t'):
-        return ' '
-    return chr(c)
-
-def dump_ram(map, start=0, count=-1, bytes_per_row=8):
-    """pretty-print the contents of memory to stdout"""
-    rows = int(len(map[:count]) / bytes_per_row)
-    pc = start
-    row = 0
-    while(row < rows):
-        print(f"0x{pc:04X} | ", 
-            " ".join([f'0x{map[pc+x]:02x}' for x in range(bytes_per_row)]),
-            " | ",
-            "".join([bin_print(map[pc+c]) for c in range(bytes_per_row)]))
-        pc += bytes_per_row
-        row += 1
-
-def dump_registers(V, pc, I):
-    """pretty-print the contents of the register file"""
-    # Simple debug format, 8 rows of 2 registers
-    # Followed by the PC and the index register
-
-    print ("\n".join([f'{f"V{x}":<3}: {V[x]:02X} {f"V{x+1}":<3}: {V[x+1]:02X}' for x in range(0, 16, 2)]))
-    print (f"PC: {pc:02X}")
-    print (f"I:  {I:04X}")
-
-def display_ram(screen):
-    """Update the ram display with contents of memory"""
-    for y in range(RAM_Y):
-        for x in range(RAM_X):
-            cell = y * RAM_X + x
-        
-            byte = main_mem[cell]
-            r = (byte >> 5 & 0x07) << 5
-            g = (byte >> 2 & 0x07) << 5
-            b = (byte & 0x03) << 5
-            pygame.draw.rect(screen, (r,g,b), (VIDEO_X*VIDEO_RES+x*RAM_RES,y*RAM_RES,RAM_RES,RAM_RES))
+def update_ram(screen, start, n):
+    """Update the ram display with contents of memory from start for n bytes"""
+    for offset in range(n):
+        cell = start + offset
+        col = cell % RAM_X
+        row = (cell - col) / RAM_X
+        byte = main_mem[start + offset]
+        r = (byte >> 5 & 0x07) << 5
+        g = (byte >> 2 & 0x07) << 5
+        b = (byte & 0x03) << 5
+        pygame.draw.rect(screen, (r,g,b), (VIDEO_X*VIDEO_RES+col*RAM_RES,row*RAM_RES,RAM_RES,RAM_RES))
+    pygame.display.flip()
 
 def display_regs(screen, font):
     line_off = font.size("V")[1]
     disp = ""
-    # screen.fill((255,255,255))
+    # This just blanks the register display.
+    screen.fill((255,255,255), (REG_DISP_X_OFF, REG_DISP_Y_OFF, REG_DISP_W, REG_DISP_H))  
     for x in range(0, 16, 4):
         disp = ""
         for r in range(4):
@@ -378,7 +360,7 @@ def timer_update(timer, ms):
 def ins_cls(screen):
     """Handle instruction 0x00e0 CLS - Clear the screen"""
     pygame.draw.rect(screen, PIXEL_OFF, (0, 0, VIDEO_X * VIDEO_RES, VIDEO_Y * VIDEO_RES))
-    pygame.display.flip()
+    # pygame.display.flip()
     return [[(0, True) for x in range(VIDEO_X)] for y in range(VIDEO_Y)]
 
 def ins_ret():
@@ -566,7 +548,7 @@ def ins_skipkey(x, code):
         logging.error(f"Invalid instruction at {reg_PC:04x}: {code:04x}")
         running = False
 
-def ins_io(op):
+def ins_io(op, screen):
     global reg_V
     global reg_PC
     global running
@@ -615,11 +597,13 @@ def ins_io(op):
         main_mem[reg_I] = hundreds
         main_mem[reg_I+1] = tens
         main_mem[reg_I+2] = digits
+        update_ram(screen, reg_I, 2)
 
     elif code == 0x55:
         logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD [I], V{x:1x}")
         for n in range(x):
             main_mem[reg_I+n] = reg_V[n]
+            update_ram(screen, reg_I, x)
     elif code == 0x65:
         logging.info(f"{reg_PC:04x} | OP 0xF{x:1x}{code:02x} - LD V{x:1x}, [I]")
         logging.debug(f"I: {reg_I:04x}")
