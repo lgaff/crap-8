@@ -104,7 +104,7 @@ KEY_MAP = [
 
 # Machine state variables
 main_mem = []
-vmem = []
+v_mem = []
 reg_I = 0
 reg_V = []
 reg_PC = 0
@@ -118,16 +118,12 @@ d_timer = 0
 # Ticks deducted per wall-second from timers
 timer_tps = 1000000 / TIMER_HZ
 
-
-
-
-
 def main(argv):
     global running
     global d_timer, s_timer
     global reg_PC, reg_V, reg_I
     global main_mem
-    global vmem
+    global v_mem
 
     running = False
     logging.info("Crap8 - The shitty Chip-8 interpreter")
@@ -140,9 +136,7 @@ def main(argv):
     pygame.init()
     pygame.font.init()
 
-    
-    
-
+ 
     # RAM display
     # TODO: re-enable this.
     logging.debug(f"Main memory display {RAM_X} by {RAM_Y}, {RAM_X*RAM_RES} x {RAM_Y*RAM_RES} pixels")    
@@ -173,10 +167,10 @@ def main(argv):
     logging.debug(f"Main memory {TOTAL_RAM:d} bytes initalised")
     logging.debug(f"Fonts loaded to {FONT_LOAD:04x}")
     
-    # vmem is a 2-d array of tuples. The first value is the pixel state
+    # v_mem is a 2-d array of tuples. The first value is the pixel state
     # Second value is whether the pixel has changed in this machine cycle
     # So we can redraw it if necessary
-    vmem = ins_cls()
+    v_mem = ins_cls()
     logging.debug(f"Video memory {VIDEO_X} bytes initialised")
 
     reg_I = 0
@@ -202,6 +196,7 @@ def main(argv):
     step = False
     do_cycle = True
     
+    # Main Emulation loop start
     while running:
         screen.fill((255,255,255), (reg_disp_xpos, reg_disp_ypos, reg_disp_w, reg_disp_h))    
         cycle_start = datetime.now()
@@ -217,7 +212,7 @@ def main(argv):
         instruction = main_mem[reg_PC] << 8 | main_mem[reg_PC+1]
         if do_cycle: ## Decode & Execute
             if instruction == 0x00E0: # CLS - clear the screen
-                vmem = ins_cls()
+                v_mem = ins_cls()
             elif instruction == 0x00EE: # RET - return from subroutine
                 ins_ret()
             elif instruction >> 12 == 0x1: # 0x1nnn JP nnn - Jump to instruction nnn
@@ -342,18 +337,18 @@ def dump_registers(V, pc, I):
     print (f"I:  {I:04X}")
         
 def display_video(screen):
-    global vmem
+    global v_mem
     for y in range (VIDEO_Y):
         for x in range (VIDEO_X):
             # logging.debug(f"{x}, {y})")
-            px = vmem[y][x]
+            px = v_mem[y][x]
             if px[1]:
                 if px[0]:
                     color = PIXEL_ON
                 else:
                     color = PIXEL_OFF
                 pygame.draw.rect(screen, color, (x*VIDEO_RES,y*VIDEO_RES,VIDEO_RES,VIDEO_RES))
-                vmem[y][x] = (px[0], False)
+                v_mem[y][x] = (px[0], False)
 
 def display_ram(screen):
     """Update the ram display with contents of memory"""
@@ -537,9 +532,9 @@ def ins_rnd(x, kk):
 
 def ins_draw(x, y, n):
     global reg_V
-    global vmem
+    global v_mem
     logging.info(f"{reg_PC:04x} | OP 0xD{x:1x}{y:1x}{n:1x} - DRW V{x:1x}, V{y:1x}, {n:1x} ({reg_V[x]:02x} {reg_V[y]:02x})")
-    # Draw sprite at location (x, y) into vmem
+    # Draw sprite at location (x, y) into v_mem
     # Each byte in memory at [I] represents one line of the sprite.
     # Pixels are binary and the value should be xor'd with the incoming pixel
     # for collision detection.
@@ -554,12 +549,12 @@ def ins_draw(x, y, n):
             xpos = (reg_V[x] + col) % VIDEO_X
 
             px = main_mem[reg_I + row] >> (7 - col) & 0x1
-            logging.debug(f"pixel ({xpos}, {ypos}) in {px} out {vmem[ypos][xpos][0]} :: {vmem[ypos][xpos][0] ^ px}")
-            if px + vmem[ypos][xpos][0] == 2:
+            logging.debug(f"pixel ({xpos}, {ypos}) in {px} out {v_mem[ypos][xpos][0]} :: {v_mem[ypos][xpos][0] ^ px}")
+            if px + v_mem[ypos][xpos][0] == 2:
                 logging.debug("set collision")
                 reg_V[0xF] = 1
             
-            vmem[ypos][xpos] = (vmem[ypos][xpos][0] ^ px, True)
+            v_mem[ypos][xpos] = (v_mem[ypos][xpos][0] ^ px, True)
 
 
 def ins_skipkey(x, code):
@@ -642,10 +637,5 @@ def ins_io(op):
         logging.error(f"Invalid instruction at {reg_PC:04x}: {op:04x}")
         running = False
     
-        
-    
-
-
-
 if __name__ == "__main__":
     main(sys.argv[1:])
